@@ -100,6 +100,8 @@
       <option value="duvida">Em dúvida</option>
       <option value="nao_achado">Não achados</option>
       <option value="pendente">Dúvida ou não achado</option>
+      <option value="tmdb">Só TMDB</option>
+      <option value="nenhum">Sem Cinemateca nem TMDB</option>
     </select>
     <select id="fUf"></select>
     <select id="fDist"></select>
@@ -165,6 +167,7 @@ const COLS = [
 ];
 const NUM = ['lancamento', 'brasilia', 'gramado', 'salas', 'publico', 'renda'];
 const fmt = (v, dec = 0) => v == null ? '' : Number(v).toLocaleString('pt-BR', { minimumFractionDigits: dec, maximumFractionDigits: dec });
+const fmtData = s => /^\d{4}\.\d{2}\.\d{2}$/.test(s || '') ? s.split('.').reverse().join('/') : (s || '');  // 1994.07.29 → 29/07/1994
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const norm = s => String(s ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
 const toast = t => { const m = $('msg'); m.textContent = t; m.classList.add('on'); setTimeout(() => m.classList.remove('on'), 2200); };
@@ -200,7 +203,9 @@ function filtrados() {
   return filmes.filter(f => {
     if (q && !norm([f.titulo, f.diretor, f.produtora, f.distribuidora, f.obs, f.sinopse, (f.elenco || []).join(' ')].join(' ')).includes(q)) return false;
     const st = f.cinemateca_id ? 'certo' : f.cinemateca_status;
-    if (cin === 'pendente' ? !(st === 'duvida' || st === 'nao_achado') : cin && st !== cin) return false;
+    if (cin === 'tmdb') { if (f.cinemateca_id || !f.tmdb_id) return false; }
+    else if (cin === 'nenhum') { if (f.cinemateca_id || f.tmdb_id) return false; }
+    else if (cin === 'pendente' ? !(st === 'duvida' || st === 'nao_achado') : cin && st !== cin) return false;
     if (ano === '__sem' ? f.lancamento != null : ano && String(f.lancamento) !== ano) return false;
     if (gen && f.genero !== gen) return false;
     if (uf && f.uf !== uf) return false;
@@ -237,8 +242,8 @@ function render() {
     `<th data-c="${c}" class="${n || ''} ${c === campo ? 'on' : ''}">${r}${c === campo ? (dir > 0 ? ' ▲' : ' ▼') : ''}</th>`).join('');
 
   $('lista').innerHTML = lista.length ? lista.map(f => `<tr data-id="${esc(f.id)}">
-    <td class="t">${esc(f.titulo)}${!f.cinemateca_id && f.cinemateca_status ? `<span class="tag">${f.cinemateca_status === 'duvida' ? 'dúvida Cinemateca' : 'sem Cinemateca'}</span>` : ''}<span class="sub">${esc(f.diretor)}${f.duracao ? ' · ' + f.duracao + ' min' : ''}</span></td>
-    <td class="n">${f.lancamento ?? ''}</td>
+    <td class="t">${esc(f.titulo)}${f.cinemateca_id ? '' : f.tmdb_id ? '<span class="tag">TMDB</span>' : f.cinemateca_status ? `<span class="tag">${f.cinemateca_status === 'duvida' ? 'dúvida Cinemateca' : 'sem Cinemateca'}</span>` : ''}<span class="sub">${esc(f.diretor)}${f.duracao ? ' · ' + f.duracao + ' min' : ''}</span></td>
+    <td class="n">${f.lancamento ?? ''}${f.lancamento_cin ? `<span class="sub">${fmtData(f.lancamento_cin).slice(0, 5)}</span>` : ''}</td>
     <td>${f.brasilia != null ? `<span class="fest">Brasília ${f.brasilia}</span>` : ''}${f.gramado != null ? `<span class="fest">Gramado ${f.gramado}</span>` : ''}</td>
     <td>${esc(f.genero)}</td>
     <td>${esc(f.distribuidora)}</td>
@@ -302,7 +307,7 @@ function renderCin() {
     const url = f.cinemateca?.URL || '';
     h += `<h3>Filmografia Brasileira <a href="${esc(url)}" target="_blank" rel="noopener">cód. ${esc(f.cinemateca_id)} ↗</a>
       ${podeEditar ? '<button type="button" id="bDesvincular" style="margin-left:auto;font-size:12px">Desvincular</button>' : ''}</h3>`;
-    const meta = [f.cinemateca?.Categorias, f.duracao && f.duracao + ' min', f.lancamento_cin && 'lançamento ' + f.lancamento_cin].filter(Boolean);
+    const meta = [f.cinemateca?.Categorias, f.duracao && f.duracao + ' min', f.lancamento_cin && 'lançamento ' + fmtData(f.lancamento_cin)].filter(Boolean);
     if (meta.length) h += `<p class="meta">${esc(meta.join(' · '))}</p>`;
     if (f.sinopse) h += `<p>${esc(f.sinopse)}</p>`;
     if (f.elenco?.length) h += `<p class="meta"><b>Elenco:</b> ${esc(f.elenco.slice(0, 12).join(', '))}${f.elenco.length > 12 ? '…' : ''}</p>`;
@@ -319,12 +324,109 @@ function renderCin() {
       <input id="cinCod" placeholder="ou código" style="flex:0 1 110px"><button type="button" id="bCinCod">Vincular</button></div>
       <div id="cinRes"></div>`;
   }
+  if (!f.cinemateca_id) h += tmdbHtml(f);  // TMDB só para quem ficou sem Cinemateca
   box.innerHTML = h;
+}
+
+// ----- TMDB (filmes sem Cinemateca) -----
+const TMDB_KEY = '06567bcb467a70e4cdae54a19c4b72bf', TMDB_API = 'https://api.themoviedb.org/3';
+const tmdbGet = async (path, p = {}) => {
+  const r = await fetch(`${TMDB_API}${path}?` + new URLSearchParams({ api_key: TMDB_KEY, ...p }));
+  if (!r.ok) throw new Error('TMDB ' + r.status);
+  return r.json();
+};
+const poster = p => p ? `<img src="https://image.tmdb.org/t/p/w92${esc(p)}" style="width:46px;height:69px;object-fit:cover;border-radius:3px" loading="lazy">` : '';
+function tmdbCandHtml(cs) {
+  return cs.map(c => `<div class="cand">${poster(c.poster)}<div><b>${esc(c.titulo)}</b> (${c.ano ?? '?'})
+      <small>${c.titulo_original && c.titulo_original !== c.titulo ? '<i>' + esc(c.titulo_original) + '</i> · ' : ''}${esc(c.direcao || 'direção não informada')} · ID ${c.id}</small></div>
+      <span class="pts">${c.pontos != null ? c.pontos + ' pts' : ''}</span>
+      <a href="https://www.themoviedb.org/movie/${c.id}" target="_blank" rel="noopener">ver</a>
+      ${podeEditar ? `<button type="button" data-tmdb="${c.id}">É este</button>` : ''}</div>`).join('');
+}
+function tmdbHtml(f) {
+  let h = '<div style="margin-top:14px">';
+  if (f.tmdb_id) {
+    const t = f.tmdb || {};
+    h += `<h3>TMDB <a href="${esc(t.url || 'https://www.themoviedb.org/movie/' + f.tmdb_id)}" target="_blank" rel="noopener">ID ${f.tmdb_id} ↗</a>
+      ${podeEditar ? '<button type="button" id="bTmdbDesv" style="margin-left:auto;font-size:12px">Desvincular</button>' : ''}</h3>
+      <div style="display:flex;gap:12px">${poster(t.poster)}<div style="flex:1">
+      <p class="meta">${esc([t.titulo_original && t.titulo_original !== t.titulo ? t.titulo_original : '', t.direcao, f.duracao && f.duracao + ' min', t.data && 'lançamento ' + t.data.split('-').reverse().join('/')].filter(Boolean).join(' · '))}</p>
+      ${f.sinopse ? `<p>${esc(f.sinopse)}</p>` : ''}
+      ${f.elenco?.length ? `<p class="meta"><b>Elenco:</b> ${esc(f.elenco.slice(0, 12).join(', '))}</p>` : ''}</div></div>`;
+  } else {
+    h += '<h3>TMDB</h3>';
+    const cs = f.tmdb_candidatos || [];
+    h += cs.length ? `<p class="meta">${f.tmdb_status === 'duvida' ? 'Qual destes é o filme?' : 'Nenhum candidato bom; os mais próximos:'}</p>${tmdbCandHtml(cs)}`
+                   : '<p class="meta">Ainda não vinculado.</p>';
+    if (podeEditar) h += `<div class="cinbusca"><input id="tmdbQ" placeholder="Buscar no TMDB" value="${esc(f.titulo.replace(/\(relan[cç]\.?\)/i, '').trim())}">
+      <button type="button" id="bTmdbBusca">Buscar</button>
+      <input id="tmdbCod" placeholder="ou ID / link" style="flex:0 1 130px"><button type="button" id="bTmdbCod">Vincular</button></div>
+      <div id="tmdbRes"></div>`;
+  }
+  return h + '</div>';
+}
+async function tmdbBuscar(q) {
+  const f = editando;
+  const res = (await tmdbGet('/search/movie', { query: q, language: 'pt-BR', include_adult: 'false' })).results.slice(0, 8);
+  await Promise.all(res.map(async m => {
+    try { m.direcao = (await tmdbGet(`/movie/${m.id}/credits`)).crew.filter(p => p.job === 'Director').map(p => p.name).join(', '); } catch { m.direcao = ''; }
+  }));
+  const anos = [f.lancamento, f.brasilia, f.gramado].filter(Boolean);
+  const nomes = s => new Set(norm(s).split(' ').filter(p => p.length > 2));
+  return res.map(m => {
+    const ano = m.release_date ? Number(m.release_date.slice(0, 4)) : null;
+    let pts = 0;  // pontuação simples só para ordenar: ano e direção
+    if (ano && anos.length) pts += Math.max(0, 30 - 8 * Math.min(...anos.map(a => Math.abs(a - ano))));
+    if (f.diretor && m.direcao && [...nomes(f.diretor)].some(x => nomes(m.direcao).has(x))) pts += 25;
+    return { id: m.id, titulo: m.title, titulo_original: m.original_title, ano, direcao: m.direcao, poster: m.poster_path, pontos: null, _o: pts };
+  }).sort((a, b) => b._o - a._o);
+}
+async function tmdbVincular(id, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = 'Importando…'; }
+  try {
+    const d = await tmdbGet(`/movie/${id}`, { language: 'pt-BR', append_to_response: 'credits' });
+    const f = editando, dir = (d.credits?.crew || []).filter(p => p.job === 'Director').map(p => p.name).join(', ');
+    const campos = {
+      tmdb_id: d.id, tmdb_status: 'certo', tmdb_candidatos: deleteField(), atualizado: serverTimestamp(),
+      tmdb: { id: d.id, titulo: d.title, titulo_original: d.original_title, data: d.release_date || null, duracao: d.runtime || null,
+              sinopse: d.overview || null, direcao: dir, poster: d.poster_path || null, url: 'https://www.themoviedb.org/movie/' + d.id },
+    };
+    if (!f.sinopse && d.overview) campos.sinopse = d.overview;
+    if (!f.duracao && d.runtime) campos.duracao = d.runtime;
+    const el = (d.credits?.cast || []).slice(0, 12).map(p => p.character ? `${p.name} (${p.character})` : p.name);
+    if (!f.elenco?.length && el.length) campos.elenco = el;
+    await updateDoc(doc(db, COL, f.id), campos);
+    toast('Vinculado ao TMDB: ' + d.title);
+    await recarregarFicha(f.id);
+  } catch (err) { alert('Erro ao importar do TMDB: ' + err.message); if (btn) { btn.disabled = false; btn.textContent = 'É este'; } }
 }
 $('cinBox').addEventListener('click', async e => {
   const f = editando; if (!f || !podeEditar) return;
   const b = e.target.closest('button'); if (!b) return;
   if (b.dataset.vincular) return vincular(b.dataset.vincular, b);
+  if (b.dataset.tmdb) return tmdbVincular(b.dataset.tmdb, b);
+  if (b.id === 'bTmdbCod') {
+    const v = $('tmdbCod').value.trim(), m = v.match(/themoviedb\.org\/movie\/(\d+)/) || v.match(/^(\d+)$/);
+    if (!m) { alert('Informe o ID numérico do TMDB ou cole o link do filme.'); return; }
+    return tmdbVincular(m[1], b);
+  }
+  if (b.id === 'bTmdbBusca') {
+    const q = $('tmdbQ').value.trim(); if (!q) return;
+    $('tmdbRes').innerHTML = '<p class="meta">Buscando…</p>';
+    try { const cs = await tmdbBuscar(q); $('tmdbRes').innerHTML = cs.length ? tmdbCandHtml(cs) : '<p class="meta">Nada encontrado.</p>'; }
+    catch (err) { $('tmdbRes').innerHTML = `<p class="meta">Erro na busca: ${esc(err.message)}</p>`; }
+    return;
+  }
+  if (b.id === 'bTmdbDesv') {
+    if (!confirm('Desvincular do TMDB? Sinopse, elenco e duração vindos do TMDB serão apagados.')) return;
+    const campos = { tmdb_status: 'nao_achado', tmdb_id: deleteField(), tmdb: deleteField() };
+    // só apaga o que veio do TMDB (o que não veio de outra fonte)
+    if (f.tmdb?.sinopse && f.sinopse === f.tmdb.sinopse) campos.sinopse = deleteField();
+    if (f.tmdb?.duracao && f.duracao === f.tmdb.duracao) campos.duracao = deleteField();
+    if (f.elenco?.length) campos.elenco = deleteField();
+    await updateDoc(doc(db, COL, f.id), campos);
+    await recarregarFicha(f.id); return;
+  }
   if (b.id === 'bCinCod') { const c = $('cinCod').value.trim(); if (c) vincular(c.padStart(6, '0'), b); return; }
   if (b.id === 'bDesvincular') {
     if (!confirm('Desvincular da Cinemateca? Sinopse, elenco e duração importados serão apagados.')) return;
@@ -351,6 +453,8 @@ $('cinBox').addEventListener('keydown', e => {
   e.preventDefault();  // não enviar o formulário do filme
   if (e.target.id === 'cinQ') $('bCinBusca').click();
   if (e.target.id === 'cinCod') $('bCinCod').click();
+  if (e.target.id === 'tmdbQ') $('bTmdbBusca').click();
+  if (e.target.id === 'tmdbCod') $('bTmdbCod').click();
 });
 async function vincular(codigo, btn) {
   btn.disabled = true; btn.textContent = 'Importando…';
