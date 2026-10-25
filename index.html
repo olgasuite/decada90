@@ -485,6 +485,8 @@ frm.addEventListener('submit', async e => {
     const v = el.value.trim();
     dados[el.name] = v === '' ? null : NUM.includes(el.name) ? Number(v) : v;
   }
+  // UF sem repetição e em ordem alfabética: 'RJ/RJ' → 'RJ', 'SP/RJ' → 'RJ/SP'
+  if (dados.uf) dados.uf = [...new Set(dados.uf.toUpperCase().split(/[\/;,\s]+/).filter(Boolean))].sort().join('/') || null;
   dados.atualizado = serverTimestamp();
   try {
     let id = editando?.id;
