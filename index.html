@@ -53,6 +53,18 @@
   .grid .w2 { grid-column: span 2; } .grid .w4 { grid-column: span 4; }
   .acoes { display: flex; gap: 8px; margin-top: 16px; }
   .acoes .sp { flex: 1; }
+  #cinBox { margin-top: 16px; border-top: 1px solid var(--ln); padding-top: 12px; }
+  #cinBox h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: var(--mut); margin: 0 0 8px; display: flex; gap: 8px; align-items: center; }
+  #cinBox h3 a { color: var(--acc); text-transform: none; letter-spacing: 0; font-weight: 400; }
+  #cinBox p { margin: 6px 0; }
+  #cinBox .meta { color: var(--mut); font-size: 12px; }
+  .cand { display: flex; gap: 10px; align-items: center; padding: 6px 8px; border: 1px solid var(--ln); border-radius: 6px; margin: 5px 0; }
+  .cand div { flex: 1; } .cand small { color: var(--mut); display: block; }
+  .cand .pts { font-variant-numeric: tabular-nums; color: var(--mut); font-size: 12px; white-space: nowrap; }
+  .cinbusca { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+  .cinbusca input { flex: 1 1 200px; }
+  .tag { display: inline-block; font-size: 11px; padding: 1px 6px; border-radius: 10px; border: 1px solid var(--ln); color: var(--mut); margin-left: 6px; font-weight: 400; vertical-align: 1px; }
+  details summary { cursor: pointer; color: var(--mut); font-size: 12px; }
   #msg { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: var(--tx); color: var(--bg); padding: 8px 16px; border-radius: 6px; opacity: 0; transition: opacity .2s; pointer-events: none; }
   #msg.on { opacity: 1; }
   @media (max-width: 640px) { .grid { grid-template-columns: 1fr 1fr; } .grid .w4 { grid-column: span 2; } main, header { padding-left: 12px; padding-right: 12px; } }
@@ -82,6 +94,13 @@
       <option value="algum">Algum festival</option>
       <option value="nenhum">Nenhum festival</option>
     </select>
+    <select id="fCin">
+      <option value="">Cinemateca: todos</option>
+      <option value="certo">Vinculados</option>
+      <option value="duvida">Em dúvida</option>
+      <option value="nao_achado">Não achados</option>
+      <option value="pendente">Dúvida ou não achado</option>
+    </select>
     <select id="fUf"></select>
     <select id="fDist"></select>
     <button id="bLimpa">Limpar</button>
@@ -109,6 +128,7 @@
     <label>Renda (R$)<input name="renda" type="number" min="0" step="0.01"></label>
     <label class="w4">Observações<textarea name="obs" rows="3"></textarea></label>
   </div>
+  <div id="cinBox"></div>
   <div class="acoes">
     <button type="button" id="bExcluir" class="perigo">Excluir</button>
     <div class="sp"></div>
@@ -122,7 +142,7 @@
 <script type="module">
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
-import { getFirestore, collection, getDocs, doc, getDoc, setDoc, deleteDoc, serverTimestamp } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
+import { getFirestore, collection, getDocs, doc, getDoc, setDoc, updateDoc, deleteDoc, deleteField, serverTimestamp } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
 
 const app = initializeApp({
   apiKey: "AIzaSyDIBhcsqlK3QebTmbWMNqsN_rPPybREj64",
@@ -131,6 +151,8 @@ const app = initializeApp({
 });
 const auth = getAuth(app), db = getFirestore(app);
 const COL = 'decada90_filmes', DONO = 'lg.rchrd@gmail.com';
+const FN_CIN = 'https://us-central1-olga-suite.cloudfunctions.net/cinemateca';
+const FN_CIN_BUSCA = 'https://us-central1-olga-suite.cloudfunctions.net/cinematecaBusca';
 const $ = id => document.getElementById(id);
 
 let filmes = [], podeEditar = false, editando = null;
@@ -174,9 +196,11 @@ function montarFiltros() {
 
 function filtrados() {
   const q = norm($('busca').value).trim(), ano = $('fAno').value, gen = $('fGen').value,
-        fest = $('fFest').value, uf = $('fUf').value, dist = $('fDist').value;
+        fest = $('fFest').value, uf = $('fUf').value, dist = $('fDist').value, cin = $('fCin').value;
   return filmes.filter(f => {
-    if (q && !norm([f.titulo, f.diretor, f.produtora, f.distribuidora, f.obs].join(' ')).includes(q)) return false;
+    if (q && !norm([f.titulo, f.diretor, f.produtora, f.distribuidora, f.obs, f.sinopse, (f.elenco || []).join(' ')].join(' ')).includes(q)) return false;
+    const st = f.cinemateca_id ? 'certo' : f.cinemateca_status;
+    if (cin === 'pendente' ? !(st === 'duvida' || st === 'nao_achado') : cin && st !== cin) return false;
     if (ano === '__sem' ? f.lancamento != null : ano && String(f.lancamento) !== ano) return false;
     if (gen && f.genero !== gen) return false;
     if (uf && f.uf !== uf) return false;
@@ -206,13 +230,14 @@ function render() {
     [fmt(soma('publico')), 'público somado'],
     ['R$ ' + fmt(soma('renda')), 'renda somada'],
     [fmt(lista.filter(f => f.brasilia != null).length) + ' / ' + fmt(lista.filter(f => f.gramado != null).length), 'em Brasília / Gramado'],
+    [fmt(lista.filter(f => f.cinemateca_id).length), 'vinculados à Cinemateca'],
   ].map(([b, s]) => `<div class="tile"><b>${b}</b><small>${s}</small></div>`).join('');
 
   $('cab').innerHTML = COLS.map(([c, r, n]) =>
     `<th data-c="${c}" class="${n || ''} ${c === campo ? 'on' : ''}">${r}${c === campo ? (dir > 0 ? ' ▲' : ' ▼') : ''}</th>`).join('');
 
   $('lista').innerHTML = lista.length ? lista.map(f => `<tr data-id="${esc(f.id)}">
-    <td class="t">${esc(f.titulo)}<span class="sub">${esc(f.diretor)}</span></td>
+    <td class="t">${esc(f.titulo)}${!f.cinemateca_id && f.cinemateca_status ? `<span class="tag">${f.cinemateca_status === 'duvida' ? 'dúvida Cinemateca' : 'sem Cinemateca'}</span>` : ''}<span class="sub">${esc(f.diretor)}${f.duracao ? ' · ' + f.duracao + ' min' : ''}</span></td>
     <td class="n">${f.lancamento ?? ''}</td>
     <td>${f.brasilia != null ? `<span class="fest">Brasília ${f.brasilia}</span>` : ''}${f.gramado != null ? `<span class="fest">Gramado ${f.gramado}</span>` : ''}</td>
     <td>${esc(f.genero)}</td>
@@ -229,8 +254,9 @@ $('cab').addEventListener('click', e => {
   ordem = ordem.campo === c ? { campo: c, dir: -ordem.dir } : { campo: c, dir: NUM.includes(c) && c !== 'lancamento' ? -1 : 1 };
   render();
 });
-['busca', 'fAno', 'fGen', 'fFest', 'fUf', 'fDist'].forEach(id => $(id).addEventListener('input', render));
-$('bLimpa').onclick = () => { ['busca', 'fAno', 'fGen', 'fFest', 'fUf', 'fDist'].forEach(id => $(id).value = ''); render(); };
+const FILTROS = ['busca', 'fAno', 'fGen', 'fFest', 'fUf', 'fDist', 'fCin'];
+FILTROS.forEach(id => $(id).addEventListener('input', render));
+$('bLimpa').onclick = () => { FILTROS.forEach(id => $(id).value = ''); render(); };
 
 // ----- ficha -----
 const frm = $('frm');
@@ -240,7 +266,105 @@ function abrir(f) {
   for (const el of frm.elements) if (el.name) { el.value = f?.[el.name] ?? ''; el.disabled = !podeEditar; }
   $('bSalvar').hidden = !podeEditar;
   $('bExcluir').hidden = !podeEditar || !f;
+  renderCin();
   $('dlg').showModal();
+}
+
+// ----- Filmografia Brasileira (Cinemateca) -----
+function nomeElenco(s) {  // 'Montenegro, Fernanda (Dora)' → 'Fernanda Montenegro (Dora)'
+  const m = s.match(/^([^,(]+),\s*([^(]+?)\s*(\(.*\))?$/);
+  return m ? `${m[2]} ${m[1]} ${m[3] || ''}`.trim() : s;
+}
+function derivadosCin(cd) {
+  const o = { cinemateca_id: cd.ID, cinemateca: cd, cinemateca_status: 'certo', cinemateca_candidatos: deleteField() };
+  if (cd['Sinopse']) o.sinopse = cd['Sinopse'];
+  const dur = String(cd['Material original'] || '').match(/(\d+)\s*min/);
+  if (dur) o.duracao = Number(dur[1]);
+  const el = cd['Identidades/elenco:'];
+  if (el) o.elenco = (Array.isArray(el) ? el : [el]).map(nomeElenco);
+  const lc = cd['Data e local de lançamento'];
+  if (lc && lc.Data) o.lancamento_cin = Array.isArray(lc.Data) ? lc.Data[0] : lc.Data;
+  if (cd['Prêmios']) o.premios = cd['Prêmios'];
+  return o;
+}
+function candHtml(cs) {
+  return cs.map(c => `<div class="cand"><div><b>${esc(c.titulo)}</b> (${c.ano ?? '?'})
+      <small>${esc(c.direcao || 'direção não informada')} · ${esc(c.categoria || '')} · cód. ${esc(c.codigo)}</small></div>
+      <span class="pts">${c.pontos != null ? c.pontos + ' pts' : ''}</span>
+      <a href="https://bases.cinemateca.org.br/cgi-bin/wxis.exe/iah/?IsisScript=iah/iah.xis&base=FILMOGRAFIA&lang=p&nextAction=lnk&exprSearch=ID=${esc(c.codigo)}&format=detailed.pft" target="_blank" rel="noopener">ver</a>
+      ${podeEditar ? `<button type="button" data-vincular="${esc(c.codigo)}">É este</button>` : ''}</div>`).join('');
+}
+function renderCin() {
+  const f = editando, box = $('cinBox');
+  if (!f) { box.innerHTML = ''; return; }
+  let h = '';
+  if (f.cinemateca_id) {
+    const url = f.cinemateca?.URL || '';
+    h += `<h3>Filmografia Brasileira <a href="${esc(url)}" target="_blank" rel="noopener">cód. ${esc(f.cinemateca_id)} ↗</a>
+      ${podeEditar ? '<button type="button" id="bDesvincular" style="margin-left:auto;font-size:12px">Desvincular</button>' : ''}</h3>`;
+    const meta = [f.cinemateca?.Categorias, f.duracao && f.duracao + ' min', f.lancamento_cin && 'lançamento ' + f.lancamento_cin].filter(Boolean);
+    if (meta.length) h += `<p class="meta">${esc(meta.join(' · '))}</p>`;
+    if (f.sinopse) h += `<p>${esc(f.sinopse)}</p>`;
+    if (f.elenco?.length) h += `<p class="meta"><b>Elenco:</b> ${esc(f.elenco.slice(0, 12).join(', '))}${f.elenco.length > 12 ? '…' : ''}</p>`;
+    if (f.premios) h += `<details><summary>Prêmios</summary><p class="meta">${esc(f.premios)}</p></details>`;
+  } else {
+    h += `<h3>Filmografia Brasileira</h3>`;
+    const cs = f.cinemateca_candidatos || [];
+    h += cs.length ? `<p class="meta">${f.cinemateca_status === 'duvida' ? 'Não tenho certeza — qual destes é o filme?' : 'Nenhum candidato bom; os mais próximos:'}</p>${candHtml(cs)}`
+                   : `<p class="meta">Ainda não vinculado.</p>`;
+  }
+  if (podeEditar && !f.cinemateca_id) {
+    h += `<div class="cinbusca"><input id="cinQ" placeholder="Buscar outro título na Cinemateca" value="${esc(f.titulo)}">
+      <button type="button" id="bCinBusca">Buscar</button>
+      <input id="cinCod" placeholder="ou código" style="flex:0 1 110px"><button type="button" id="bCinCod">Vincular</button></div>
+      <div id="cinRes"></div>`;
+  }
+  box.innerHTML = h;
+}
+$('cinBox').addEventListener('click', async e => {
+  const f = editando; if (!f || !podeEditar) return;
+  const b = e.target.closest('button'); if (!b) return;
+  if (b.dataset.vincular) return vincular(b.dataset.vincular, b);
+  if (b.id === 'bCinCod') { const c = $('cinCod').value.trim(); if (c) vincular(c.padStart(6, '0'), b); return; }
+  if (b.id === 'bDesvincular') {
+    if (!confirm('Desvincular da Cinemateca? Sinopse, elenco e duração importados serão apagados.')) return;
+    const campos = { cinemateca_status: 'nao_achado' };
+    ['cinemateca_id', 'cinemateca', 'sinopse', 'duracao', 'elenco', 'lancamento_cin', 'premios'].forEach(k => campos[k] = deleteField());
+    await updateDoc(doc(db, COL, f.id), campos);
+    await recarregarFicha(f.id); return;
+  }
+  if (b.id === 'bCinBusca') {
+    const q = $('cinQ').value.trim(); if (!q) return;
+    $('cinRes').innerHTML = '<p class="meta">Buscando…</p>';
+    try {
+      const p = new URLSearchParams({ q });
+      const ano = f.lancamento || f.brasilia || f.gramado; if (ano) p.set('ano', ano);
+      if (f.diretor) p.set('diretor', f.diretor);
+      const r = await fetch(FN_CIN_BUSCA + '?' + p); const d = await r.json();
+      if (!r.ok) throw new Error(d.error || r.status);
+      $('cinRes').innerHTML = d.candidatos.length ? candHtml(d.candidatos.slice(0, 8)) : '<p class="meta">Nada encontrado.</p>';
+    } catch (err) { $('cinRes').innerHTML = `<p class="meta">Erro na busca: ${esc(err.message)}</p>`; }
+  }
+});
+$('cinBox').addEventListener('keydown', e => {
+  if (e.key !== 'Enter') return;
+  e.preventDefault();  // não enviar o formulário do filme
+  if (e.target.id === 'cinQ') $('bCinBusca').click();
+  if (e.target.id === 'cinCod') $('bCinCod').click();
+});
+async function vincular(codigo, btn) {
+  btn.disabled = true; btn.textContent = 'Importando…';
+  try {
+    const r = await fetch(FN_CIN + '?id=' + encodeURIComponent(codigo)); const cd = await r.json();
+    if (!r.ok) throw new Error(cd.error || r.status);
+    await updateDoc(doc(db, COL, editando.id), { ...derivadosCin(cd), atualizado: serverTimestamp() });
+    toast('Vinculado: ' + (cd['Título'] || codigo));
+    await recarregarFicha(editando.id);
+  } catch (err) { alert('Erro ao importar da Cinemateca: ' + err.message); btn.disabled = false; btn.textContent = 'É este'; }
+}
+async function recarregarFicha(id) {
+  await carregar();
+  const f = filmes.find(x => x.id === id); if (f) { editando = f; renderCin(); }
 }
 $('lista').addEventListener('click', e => {
   const id = e.target.closest('tr')?.dataset.id;
@@ -265,7 +389,7 @@ frm.addEventListener('submit', async e => {
       id = base;
       for (let i = 2; (await getDoc(doc(db, COL, id))).exists(); i++) id = base + '-' + i;
     }
-    await setDoc(doc(db, COL, id), dados);
+    await setDoc(doc(db, COL, id), dados, { merge: true });  // merge: preserva os dados da Cinemateca/ANCINE
     $('dlg').close();
     toast('Salvo');
     await carregar();
@@ -279,8 +403,9 @@ $('bExcluir').onclick = async () => {
 
 // ----- CSV -----
 $('bCsv').onclick = () => {
-  const cs = ['titulo', 'lancamento', 'brasilia', 'gramado', 'distribuidora', 'salas', 'publico', 'renda', 'diretor', 'genero', 'produtora', 'uf', 'obs'];
-  const cel = v => v == null ? '' : typeof v === 'number' ? String(v).replace('.', ',') : '"' + String(v).replace(/"/g, '""') + '"';
+  const cs = ['titulo', 'lancamento', 'brasilia', 'gramado', 'distribuidora', 'salas', 'publico', 'renda', 'diretor', 'genero', 'produtora', 'uf', 'obs', 'cpb',
+              'cinemateca_id', 'duracao', 'lancamento_cin', 'sinopse', 'elenco'];
+  const cel = v => v == null ? '' : Array.isArray(v) ? '"' + v.join(', ').replace(/"/g, '""') + '"' : typeof v === 'number' ? String(v).replace('.', ',') : '"' + String(v).replace(/"/g, '""') + '"';
   const txt = [cs.join(';'), ...filtrados().map(f => cs.map(c => cel(f[c])).join(';'))].join('\r\n');
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob(['﻿' + txt], { type: 'text/csv;charset=utf-8' }));
